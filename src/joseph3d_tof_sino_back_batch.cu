@@ -154,18 +154,12 @@ void joseph3d_tof_sino_back_batch(const float *lor_start,
     // misattribute such a stale error to this kernel launch.
     cudaGetLastError();
     // Group size T: number of images that share the bilinear and TOF weights
-    // of a plane. Each kernel launch handles one group of images. The images
-    // of a group are read in an interleaved way, so they should fit together
-    // in the L2 cache (we use at most half of it); otherwise the batch is
-    // slower than projecting the images one by one. For large images T is 1.
-    int current_device = 0;
-    cudaGetDevice(&current_device);
-    int l2_bytes = 0;
-    cudaDeviceGetAttribute(&l2_bytes, cudaDevAttrL2CacheSize, current_device);
-    std::size_t images_in_l2 = std::size_t(l2_bytes) / (2 * sizeof(float) * nvoxels);
-
+    // of a plane. Each kernel launch handles one group of images. For the TOF
+    // back projection, the computation of the TOF weights dominates, so
+    // groups of up to 8 images are faster even if the images of a group do
+    // not fit in the L2 cache together.
     int T = 8;
-    while (T > 1 && (std::size_t(T) > num_images || std::size_t(T) > images_in_l2))
+    while (T > 1 && std::size_t(T) > num_images)
         T /= 2;
 
     for (std::size_t g = 0; g < num_images; g += T)
