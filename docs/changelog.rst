@@ -4,6 +4,21 @@ Changelog
 Unreleased
 ----------
 
+Added
+^^^^^
+
+* **Batch non-TOF Joseph projectors** ``joseph3d_fwd_batch`` and
+  ``joseph3d_back_batch`` (C API and Python bindings). They project a batch of
+  images with the same LORs; images are stored as ``[num_images, n0, n1, n2]``
+  and projections as ``[num_images, *lor_shape]``. The bilinear interpolation
+  weights of each traversed plane are computed once and applied to a group of
+  images. On the GPU the group size is chosen so that the images of a group fit
+  in the L2 cache. In our tests, a batch of 8 images of 128x128x64 voxels is
+  projected about 2x faster (forward) and 1.2x faster (back) than with 8
+  single-image calls; for images too large for the L2 cache the speed is the
+  same as with single-image calls. The OpenMP forward batch projection is
+  about 1.6-1.9x faster.
+
 Changed
 ^^^^^^^
 
