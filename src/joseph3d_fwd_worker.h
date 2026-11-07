@@ -40,15 +40,16 @@ WORKER_QUALIFIER inline void joseph3d_fwd_worker(std::size_t i,
   // cf is the correction factor voxel_size[dir]/cos[dir]
   ray_cube_intersection_joseph(lor_start + 3 * i, lor_end + 3 * i, image_origin, voxel_size, image_dim, direction, cf, istart, iend);
 
-  // always initialise the output; this also covers LORs that miss the cube
-  projection_values[i] = 0.0f;
-
-  // if the ray does not intersect the image cube, return
+  // if the ray does not intersect the image cube, the projection is 0
   // istart and iend are set to -1
   if (istart == -1)
   {
+    projection_values[i] = 0.0f;
     return;
   }
+
+  // sum over planes in a local variable and write the output once
+  float sum = 0.0f;
 
   if (direction == 0)
   {
@@ -64,7 +65,7 @@ WORKER_QUALIFIER inline void joseph3d_fwd_worker(std::size_t i,
     {
       i1_f = i0 * a1 + b1;
       i2_f = i0 * a2 + b2;
-      projection_values[i] += bilinear_interp_fixed0(image, n0, n1, n2, i0, i1_f, i2_f);
+      sum += bilinear_interp_fixed0(image, n0, n1, n2, i0, i1_f, i2_f);
     }
   }
   else if (direction == 1)
@@ -81,7 +82,7 @@ WORKER_QUALIFIER inline void joseph3d_fwd_worker(std::size_t i,
     {
       i0_f = i1 * a0 + b0;
       i2_f = i1 * a2 + b2;
-      projection_values[i] += bilinear_interp_fixed1(image, n0, n1, n2, i0_f, i1, i2_f);
+      sum += bilinear_interp_fixed1(image, n0, n1, n2, i0_f, i1, i2_f);
     }
   }
   else if (direction == 2)
@@ -98,9 +99,9 @@ WORKER_QUALIFIER inline void joseph3d_fwd_worker(std::size_t i,
     {
       i0_f = i2 * a0 + b0;
       i1_f = i2 * a1 + b1;
-      projection_values[i] += bilinear_interp_fixed2(image, n0, n1, n2, i0_f, i1_f, i2);
+      sum += bilinear_interp_fixed2(image, n0, n1, n2, i0_f, i1_f, i2);
     }
   }
 
-  projection_values[i] *= cf;
+  projection_values[i] = cf * sum;
 }
