@@ -577,3 +577,55 @@ WORKER_QUALIFIER inline float effective_gaussian_tof_kernel(float dx, float sigm
   float x2 = (dx - 0.5f * tbin_width) / denom;
   return 0.5f * (erff(x1) - erff(x2));
 }
+
+/**
+ * @brief TOF weights of the TOF bins around the TOF position of one plane.
+ *
+ * Computes the weights of the TOF bins it_min .. it_min+n-1 that lie within
+ * max_tof_bin_diff bins of the TOF position it_f into w[0 .. n-1]. The window
+ * is clamped to MAX_NUM_TOF_WEIGHTS bins centered on it_f. Same computation as
+ * in the TOF sinogram workers.
+ *
+ * @param it_f             TOF position of the plane (in TOF bin units)
+ * @param max_tof_bin_diff half width of the TOF window (in TOF bin units)
+ * @param tof_bin_width    width of a TOF bin
+ * @param tof_sigma        standard deviation of the TOF kernel
+ * @param num_tof_bins     number of TOF bins
+ * @param w                output buffer of size MAX_NUM_TOF_WEIGHTS
+ * @param it_min           output: TOF bin of w[0]
+ * @param k_start          output: first k with it_min + k inside [0, num_tof_bins)
+ * @param k_end            output: one past the last such k
+ * @return sum of all n weights (including bins outside [0, num_tof_bins))
+ */
+WORKER_QUALIFIER inline float tof_weight_window(float it_f,
+                                                float max_tof_bin_diff,
+                                                float tof_bin_width,
+                                                float tof_sigma,
+                                                short num_tof_bins,
+                                                float *w,
+                                                int &it_min,
+                                                int &k_start,
+                                                int &k_end)
+{
+  it_min = static_cast<int>(floorf(it_f - max_tof_bin_diff));
+  int it_max = static_cast<int>(ceilf(it_f + max_tof_bin_diff));
+  int n_tof_weights = it_max + 1 - it_min;
+
+  if (n_tof_weights > MAX_NUM_TOF_WEIGHTS)
+  {
+    it_min = static_cast<int>(lroundf(it_f)) - MAX_NUM_TOF_WEIGHTS / 2;
+    n_tof_weights = MAX_NUM_TOF_WEIGHTS;
+  }
+
+  float sum_weights = 0.0f;
+  for (int k = 0; k < n_tof_weights; ++k)
+  {
+    float dist = fabsf(it_f - it_min - k) * tof_bin_width;
+    w[k] = effective_gaussian_tof_kernel(dist, tof_sigma, tof_bin_width);
+    sum_weights += w[k];
+  }
+
+  k_start = (it_min < 0) ? -it_min : 0;
+  k_end = ((it_min + n_tof_weights) > num_tof_bins) ? (num_tof_bins - it_min) : n_tof_weights;
+  return sum_weights;
+}

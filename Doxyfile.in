@@ -39,6 +39,8 @@ ALIASES                += pp_param_projection_values_fwd_batch{1}="@param projec
 ALIASES                += pp_param_projection_values_back_batch{1}="@param projection_values Pointer to array of length @p num_images * @p \1 with the values to be backprojected.^^The values for image b start at @p projection_values[b * @p \1]."
 ALIASES                += pp_param_projection_values_tof_sino_out{2}="@param projection_values Pointer to array of length @p \1 * @p \2 (output) used to store the projections."
 ALIASES                += pp_param_projection_values_tof_sino_in{2}="@param projection_values Pointer to TOF sinogram data of length @p \1 * @p \2 (see details)."
+ALIASES                += pp_param_projection_values_tof_sino_out_batch{2}="@param projection_values Pointer to array of length @p num_images * @p \1 * @p \2 (output) used to store the projections.^^The TOF sinogram of image b starts at @p projection_values[b * @p \1 * @p \2]."
+ALIASES                += pp_param_projection_values_tof_sino_in_batch{2}="@param projection_values Pointer to TOF sinogram data of length @p num_images * @p \1 * @p \2 (see details).^^The TOF sinogram of image b starts at @p projection_values[b * @p \1 * @p \2]."
 ALIASES                += pp_param_projection_values_tof_lm_out{1}="@param projection_values Pointer to array of length @p \1 (output) used to store the projections."
 ALIASES                += pp_param_projection_values_tof_lm_back{1}="@param projection_values Pointer to array of values to be backprojected (length @p \1)."
 ALIASES                += pp_param_image_dim="@param image_dim Pointer to array with image dimensions [n0, n1, n2]."
