@@ -168,14 +168,160 @@ WORKER_QUALIFIER inline void ray_cube_intersection_joseph(
 }
 
 /**
- * Three bilinear interpolate functions for 3d image wit dims (n0,n1,n2) with uniform signatures:
- *   - bilinear_interp_fixed_0: plane at fixed i0, interpolate in (i1,i2)
- *   - bilinear_interp_fixed_1: plane at fixed i1, interpolate in (i0,i2)
- *   - bilinear_interp_fixed_2: plane at fixed i2, interpolate in (i0,i1)
+ * Bilinear interpolation in one image plane, in two steps:
+ *   1. bilinear_corners_fixed{0,1,2}: compute the offsets of the 4 corner
+ *      voxels, their bilinear weights and whether each corner lies inside
+ *      the image.
+ *   2. gather4 (forward) / scatter4 (back): read, or atomically add, the
+ *      weighted values at these corners.
+ * Step 1 depends only on the ray geometry and the image dimensions, not on
+ * the voxel values.
  *
- * All take the full 3D image pointer `img` and dimensions n0,n1,n2 at runtime.
+ * The fixed index is the plane index along the principal axis:
+ *   - fixed0: plane at fixed i0, interpolate in (i1,i2)
+ *   - fixed1: plane at fixed i1, interpolate in (i0,i2)
+ *   - fixed2: plane at fixed i2, interpolate in (i0,i1)
+ *
+ * Offsets are relative to the first voxel of the image (C order, i2 fastest).
+ * Corner order is (lo,lo), (hi,lo), (lo,hi), (hi,hi) in the two interpolated
+ * axes. The offset of a corner outside the image is not meaningful and must
+ * not be used.
  *
  * If compiled with CUDA, these functions are device functions.
+ */
+struct BilinearCorners
+{
+  std::size_t off[4]; // voxel offsets
+  float w[4];         // bilinear weights
+  bool valid[4];      // corner lies inside the image
+};
+
+WORKER_QUALIFIER inline void bilinear_corners_fixed0(int n0, int n1, int n2,
+                                                     int i0,
+                                                     float i_f1,
+                                                     float i_f2,
+                                                     BilinearCorners &c)
+{
+  int i1_0 = int(floorf(i_f1));
+  int i2_0 = int(floorf(i_f2));
+  int i1_1 = i1_0 + 1;
+  int i2_1 = i2_0 + 1;
+
+  float w1 = i_f1 - i1_0;
+  float w2 = i_f2 - i2_0;
+
+  const int i1s[4] = {i1_0, i1_1, i1_0, i1_1};
+  const int i2s[4] = {i2_0, i2_0, i2_1, i2_1};
+  const float ws[4] = {(1 - w1) * (1 - w2), w1 * (1 - w2), (1 - w1) * w2, w1 * w2};
+
+  const std::size_t plane_base = std::size_t(i0) * n1 * n2;
+  for (int k = 0; k < 4; ++k)
+  {
+    c.w[k] = ws[k];
+    c.valid[k] = (i1s[k] >= 0 && i1s[k] < n1 && i2s[k] >= 0 && i2s[k] < n2);
+    c.off[k] = plane_base + std::size_t(i1s[k]) * n2 + i2s[k];
+  }
+}
+
+WORKER_QUALIFIER inline void bilinear_corners_fixed1(int n0, int n1, int n2,
+                                                     float i_f0,
+                                                     int i1,
+                                                     float i_f2,
+                                                     BilinearCorners &c)
+{
+  int i0_0 = int(floorf(i_f0));
+  int i2_0 = int(floorf(i_f2));
+  int i0_1 = i0_0 + 1;
+  int i2_1 = i2_0 + 1;
+
+  float w0 = i_f0 - i0_0;
+  float w2 = i_f2 - i2_0;
+
+  const int i0s[4] = {i0_0, i0_1, i0_0, i0_1};
+  const int i2s[4] = {i2_0, i2_0, i2_1, i2_1};
+  const float ws[4] = {(1 - w0) * (1 - w2), w0 * (1 - w2), (1 - w0) * w2, w0 * w2};
+
+  // the offsets of planes i0_0 and i0_1 differ by n1*n2
+  const std::size_t P = std::size_t(n1) * n2;
+  const std::size_t row = std::size_t(i1) * n2;
+  const std::size_t base0 = std::size_t(i0_0) * P;
+  const std::size_t base1 = base0 + P;
+  for (int k = 0; k < 4; ++k)
+  {
+    c.w[k] = ws[k];
+    c.valid[k] = (i0s[k] >= 0 && i0s[k] < n0 && i2s[k] >= 0 && i2s[k] < n2);
+    c.off[k] = ((k == 1 || k == 3) ? base1 : base0) + row + i2s[k];
+  }
+}
+
+WORKER_QUALIFIER inline void bilinear_corners_fixed2(int n0, int n1, int n2,
+                                                     float i_f0,
+                                                     float i_f1,
+                                                     int i2,
+                                                     BilinearCorners &c)
+{
+  int i0_0 = int(floorf(i_f0));
+  int i1_0 = int(floorf(i_f1));
+  int i0_1 = i0_0 + 1;
+  int i1_1 = i1_0 + 1;
+
+  float w0 = i_f0 - i0_0;
+  float w1 = i_f1 - i1_0;
+
+  const int i0s[4] = {i0_0, i0_1, i0_0, i0_1};
+  const int i1s[4] = {i1_0, i1_0, i1_1, i1_1};
+  const float ws[4] = {(1 - w0) * (1 - w1), w0 * (1 - w1), (1 - w0) * w1, w0 * w1};
+
+  // the offsets of planes i0_0 and i0_1 differ by n1*n2
+  const std::size_t P = std::size_t(n1) * n2;
+  const std::size_t col = std::size_t(i2);
+  const std::size_t base0 = std::size_t(i0_0) * P;
+  const std::size_t base1 = base0 + P;
+  for (int k = 0; k < 4; ++k)
+  {
+    c.w[k] = ws[k];
+    c.valid[k] = (i0s[k] >= 0 && i0s[k] < n0 && i1s[k] >= 0 && i1s[k] < n1);
+    c.off[k] = ((k == 1 || k == 3) ? base1 : base0) + std::size_t(i1s[k]) * n2 + col;
+  }
+}
+
+// forward step: sum of the weighted image values at the 4 corners
+// (corners outside the image count as 0)
+template <typename T = float>
+WORKER_QUALIFIER inline T gather4(const T *img, const BilinearCorners &c)
+{
+  T v = T(0);
+#if defined(__CUDACC__)
+#pragma unroll
+#elif defined(__GNUC__)
+#pragma GCC unroll 4
+#endif
+  for (int k = 0; k < 4; ++k)
+    if (c.valid[k])
+      v += img[c.off[k]] * c.w[k];
+  return v;
+}
+
+// back step: atomically add val, times the corner weight, to the 4 corners
+template <typename T = float>
+WORKER_QUALIFIER inline void scatter4(T *img, const BilinearCorners &c, T val)
+{
+#if defined(__CUDACC__)
+#pragma unroll
+#elif defined(__GNUC__)
+#pragma GCC unroll 4
+#endif
+  for (int k = 0; k < 4; ++k)
+    if (c.valid[k])
+      atomic_sum(&img[c.off[k]], val * c.w[k]);
+}
+
+/**
+ * Bilinear interpolation (forward) and its adjoint (back) in one plane of a
+ * 3D image with dims (n0,n1,n2), in a single call:
+ *   - bilinear_interp_fixed{0,1,2}: interpolated image value
+ *   - bilinear_interp_adj_fixed{0,1,2}: atomically add val to the 4 corners
+ * Same plane convention as bilinear_corners_fixed{0,1,2}.
  */
 
 template <typename T = float>
@@ -185,30 +331,9 @@ WORKER_QUALIFIER inline T bilinear_interp_fixed0(const T *img,
                                                  float i_f1,
                                                  float i_f2)
 {
-  // get the i0 image plane (contiguous in memory)
-  const T *img_plane = img + std::size_t(i0) * n1 * n2;
-
-  int i1_0 = int(floorf(i_f1));
-  int i2_0 = int(floorf(i_f2));
-  int i1_1 = i1_0 + 1;
-  int i2_1 = i2_0 + 1;
-
-  float w1 = i_f1 - i1_0;
-  float w2 = i_f2 - i2_0;
-
-  auto sample = [&](int i1, int i2) -> T
-  {
-    if (i1 < 0 || i1 >= n1 || i2 < 0 || i2 >= n2)
-      return T(0);
-    return img_plane[std::size_t(i1) * n2 + i2];
-  };
-
-  T v00 = sample(i1_0, i2_0);
-  T v10 = sample(i1_1, i2_0);
-  T v01 = sample(i1_0, i2_1);
-  T v11 = sample(i1_1, i2_1);
-
-  return v00 * (1 - w1) * (1 - w2) + v10 * (w1) * (1 - w2) + v01 * (1 - w1) * (w2) + v11 * (w1) * (w2);
+  BilinearCorners c;
+  bilinear_corners_fixed0(n0, n1, n2, i0, i_f1, i_f2, c);
+  return gather4(img, c);
 }
 
 template <typename T = float>
@@ -218,28 +343,9 @@ WORKER_QUALIFIER inline T bilinear_interp_fixed1(const T *img,
                                                  int i1,
                                                  float i_f2)
 {
-  int i0_0 = int(floorf(i_f0));
-  int i2_0 = int(floorf(i_f2));
-  int i0_1 = i0_0 + 1;
-  int i2_1 = i2_0 + 1;
-
-  float w0 = i_f0 - i0_0;
-  float w2 = i_f2 - i2_0;
-
-  auto sample = [&](int i0, int i2) -> T
-  {
-    if (i0 < 0 || i0 >= n0 || i2 < 0 || i2 >= n2)
-      return T(0);
-    std::size_t idx = std::size_t(i0) * n1 * n2 + std::size_t(i1) * n2 + i2;
-    return img[idx];
-  };
-
-  T v00 = sample(i0_0, i2_0);
-  T v10 = sample(i0_1, i2_0);
-  T v01 = sample(i0_0, i2_1);
-  T v11 = sample(i0_1, i2_1);
-
-  return v00 * (1 - w0) * (1 - w2) + v10 * (w0) * (1 - w2) + v01 * (1 - w0) * (w2) + v11 * (w0) * (w2);
+  BilinearCorners c;
+  bilinear_corners_fixed1(n0, n1, n2, i_f0, i1, i_f2, c);
+  return gather4(img, c);
 }
 
 template <typename T = float>
@@ -249,146 +355,48 @@ WORKER_QUALIFIER inline T bilinear_interp_fixed2(const T *img,
                                                  float i_f1,
                                                  int i2)
 {
-  int i0_0 = int(floorf(i_f0));
-  int i1_0 = int(floorf(i_f1));
-  int i0_1 = i0_0 + 1;
-  int i1_1 = i1_0 + 1;
-
-  float w0 = i_f0 - i0_0;
-  float w1 = i_f1 - i1_0;
-
-  auto sample = [&](int i0, int i1) -> T
-  {
-    if (i0 < 0 || i0 >= n0 || i1 < 0 || i1 >= n1)
-      return T(0);
-    std::size_t idx = std::size_t(i0) * n1 * n2 + std::size_t(i1) * n2 + i2;
-    return img[idx];
-  };
-
-  T v00 = sample(i0_0, i1_0);
-  T v10 = sample(i0_1, i1_0);
-  T v01 = sample(i0_0, i1_1);
-  T v11 = sample(i0_1, i1_1);
-
-  return v00 * (1 - w0) * (1 - w1) + v10 * (w0) * (1 - w1) + v01 * (1 - w0) * (w1) + v11 * (w0) * (w1);
-}
-
-/**
- * Three bilinear scatter (adjoint) functions for 3D image dims (n0,n1,n2):
- *   - bilinear_interp_adj_fixed0: plane at fixed i0, scatter into (i1,i2)
- *   - bilinear_interp_adj_fixed1: plane at fixed i1, scatter into (i0,i2)
- *   - bilinear_interp_adj_fixed2: plane at fixed i2, scatter into (i0,i1)
- *
- * All take the full 3D image pointer `img`, dimensions n0,n1,n2,
- * a fixed index, fractional coordinates, and a value to scatter back.
- * Uses atomic_sum to work correctly on CUDA (__device__) and OpenMP.
- */
-
-template <typename T = float>
-WORKER_QUALIFIER inline void bilinear_interp_adj_fixed0(
-    T *img,
-    int n0, int n1, int n2,
-    int i0,
-    float i_f1,
-    float i_f2,
-    T val)
-{
-  // pointer to the i0-th plane
-  T *plane = img + std::size_t(i0) * n1 * n2;
-
-  int i1_0 = int(floorf(i_f1));
-  int i2_0 = int(floorf(i_f2));
-  int i1_1 = i1_0 + 1;
-  int i2_1 = i2_0 + 1;
-
-  float w1 = i_f1 - i1_0;
-  float w2 = i_f2 - i2_0;
-  float w00 = (1 - w1) * (1 - w2);
-  float w10 = (w1) * (1 - w2);
-  float w01 = (1 - w1) * (w2);
-  float w11 = (w1) * (w2);
-
-  auto inject = [&](int i1, int i2, float w)
-  {
-    if (i1 < 0 || i1 >= n1 || i2 < 0 || i2 >= n2)
-      return;
-    atomic_sum(&plane[std::size_t(i1) * n2 + i2], val * w);
-  };
-
-  inject(i1_0, i2_0, w00);
-  inject(i1_1, i2_0, w10);
-  inject(i1_0, i2_1, w01);
-  inject(i1_1, i2_1, w11);
+  BilinearCorners c;
+  bilinear_corners_fixed2(n0, n1, n2, i_f0, i_f1, i2, c);
+  return gather4(img, c);
 }
 
 template <typename T = float>
-WORKER_QUALIFIER inline void bilinear_interp_adj_fixed1(
-    T *img,
-    int n0, int n1, int n2,
-    float i_f0,
-    int i1,
-    float i_f2,
-    T val)
+WORKER_QUALIFIER inline void bilinear_interp_adj_fixed0(T *img,
+                                                        int n0, int n1, int n2,
+                                                        int i0,
+                                                        float i_f1,
+                                                        float i_f2,
+                                                        T val)
 {
-  int i0_0 = int(floorf(i_f0));
-  int i2_0 = int(floorf(i_f2));
-  int i0_1 = i0_0 + 1;
-  int i2_1 = i2_0 + 1;
-
-  float w0 = i_f0 - i0_0;
-  float w2 = i_f2 - i2_0;
-  float w00 = (1 - w0) * (1 - w2);
-  float w10 = (w0) * (1 - w2);
-  float w01 = (1 - w0) * (w2);
-  float w11 = (w0) * (w2);
-
-  auto inject = [&](int i0, int i2, float w)
-  {
-    if (i0 < 0 || i0 >= n0 || i2 < 0 || i2 >= n2)
-      return;
-    std::size_t idx = std::size_t(i0) * n1 * n2 + std::size_t(i1) * n2 + i2;
-    atomic_sum(&img[idx], val * w);
-  };
-
-  inject(i0_0, i2_0, w00);
-  inject(i0_1, i2_0, w10);
-  inject(i0_0, i2_1, w01);
-  inject(i0_1, i2_1, w11);
+  BilinearCorners c;
+  bilinear_corners_fixed0(n0, n1, n2, i0, i_f1, i_f2, c);
+  scatter4(img, c, val);
 }
 
 template <typename T = float>
-WORKER_QUALIFIER inline void bilinear_interp_adj_fixed2(
-    T *img,
-    int n0, int n1, int n2,
-    float i_f0,
-    float i_f1,
-    int i2,
-    T val)
+WORKER_QUALIFIER inline void bilinear_interp_adj_fixed1(T *img,
+                                                        int n0, int n1, int n2,
+                                                        float i_f0,
+                                                        int i1,
+                                                        float i_f2,
+                                                        T val)
 {
-  int i0_0 = int(floorf(i_f0));
-  int i1_0 = int(floorf(i_f1));
-  int i0_1 = i0_0 + 1;
-  int i1_1 = i1_0 + 1;
+  BilinearCorners c;
+  bilinear_corners_fixed1(n0, n1, n2, i_f0, i1, i_f2, c);
+  scatter4(img, c, val);
+}
 
-  float w0 = i_f0 - i0_0;
-  float w1 = i_f1 - i1_0;
-  float w00 = (1 - w0) * (1 - w1);
-  float w10 = (w0) * (1 - w1);
-  float w01 = (1 - w0) * (w1);
-  float w11 = (w0) * (w1);
-
-  auto inject = [&](int i0, int i1, float w)
-  {
-    if (i0 < 0 || i0 >= n0 || i1 < 0 || i1 >= n1)
-      return;
-    std::size_t idx = std::size_t(i0) * n1 * n2 + std::size_t(i1) * n2 + i2;
-    atomic_sum(&img[idx], val * w);
-  };
-
-  inject(i0_0, i1_0, w00);
-  inject(i0_1, i1_0, w10);
-  inject(i0_0, i1_1, w01);
-  inject(i0_1, i1_1, w11);
+template <typename T = float>
+WORKER_QUALIFIER inline void bilinear_interp_adj_fixed2(T *img,
+                                                        int n0, int n1, int n2,
+                                                        float i_f0,
+                                                        float i_f1,
+                                                        int i2,
+                                                        T val)
+{
+  BilinearCorners c;
+  bilinear_corners_fixed2(n0, n1, n2, i_f0, i_f1, i2, c);
+  scatter4(img, c, val);
 }
 
 /**
