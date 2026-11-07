@@ -1,10 +1,29 @@
 #include "parallelproj.h"
+#include "joseph3d_fwd_worker.h"
 #include "joseph3d_fwd_batch_worker.h"
 #include "debug.h"
 #include "cuda_utils.h"
 #include <cuda_runtime.h>
 #include <iostream>
 #include <stdexcept>
+
+// single-image kernel, used for groups of one image: same code as the
+// kernel of joseph3d_fwd, which uses fewer registers than the batch kernel
+__global__ void joseph3d_fwd_batch_single_kernel(const float *lor_start,
+                                                 const float *lor_end,
+                                                 const float *image,
+                                                 const float *image_origin,
+                                                 const float *voxel_size,
+                                                 float *projection_values,
+                                                 std::size_t num_lors,
+                                                 const int *image_dim)
+{
+    std::size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < num_lors)
+    {
+        joseph3d_fwd_worker(i, lor_start, lor_end, image, image_origin, voxel_size, projection_values, image_dim);
+    }
+}
 
 template <int T>
 __global__ void joseph3d_fwd_batch_kernel(const float *lor_start,
@@ -111,15 +130,33 @@ void joseph3d_fwd_batch(const float *lor_start,
     // when it is read, so without this flush the launch check below would
     // misattribute such a stale error to this kernel launch.
     cudaGetLastError();
-    // group size T: number of images that share the bilinear weights of a plane
-    if (num_images >= 8)
-        joseph3d_fwd_batch_kernel<8><<<num_blocks, threads_per_block>>>(d_lor_start.ptr, d_lor_end.ptr, d_image.ptr, d_image_origin.ptr, d_voxel_size.ptr, d_projection_values.ptr, num_lors, d_image_dim.ptr, num_images);
-    else if (num_images >= 4)
-        joseph3d_fwd_batch_kernel<4><<<num_blocks, threads_per_block>>>(d_lor_start.ptr, d_lor_end.ptr, d_image.ptr, d_image_origin.ptr, d_voxel_size.ptr, d_projection_values.ptr, num_lors, d_image_dim.ptr, num_images);
-    else if (num_images >= 2)
-        joseph3d_fwd_batch_kernel<2><<<num_blocks, threads_per_block>>>(d_lor_start.ptr, d_lor_end.ptr, d_image.ptr, d_image_origin.ptr, d_voxel_size.ptr, d_projection_values.ptr, num_lors, d_image_dim.ptr, num_images);
-    else
-        joseph3d_fwd_batch_kernel<1><<<num_blocks, threads_per_block>>>(d_lor_start.ptr, d_lor_end.ptr, d_image.ptr, d_image_origin.ptr, d_voxel_size.ptr, d_projection_values.ptr, num_lors, d_image_dim.ptr, num_images);
+    // Group size T: number of images that share the bilinear weights of a
+    // plane. Each kernel launch handles one group of images. The images of a
+    // group are read in an interleaved way, so they should fit together in
+    // the L2 cache (we use at most half of it); otherwise the batch is slower
+    // than projecting the images one by one. For large images T is 1.
+    int current_device = 0;
+    cudaGetDevice(&current_device);
+    int l2_bytes = 0;
+    cudaDeviceGetAttribute(&l2_bytes, cudaDevAttrL2CacheSize, current_device);
+    std::size_t images_in_l2 = std::size_t(l2_bytes) / (2 * sizeof(float) * nvoxels);
+
+    int T = 8;
+    while (T > 1 && (std::size_t(T) > num_images || std::size_t(T) > images_in_l2))
+        T /= 2;
+
+    for (std::size_t g = 0; g < num_images; g += T)
+    {
+        std::size_t group_size = (num_images - g < std::size_t(T)) ? num_images - g : std::size_t(T);
+        if (T == 8)
+            joseph3d_fwd_batch_kernel<8><<<num_blocks, threads_per_block>>>(d_lor_start.ptr, d_lor_end.ptr, d_image.ptr + g * nvoxels, d_image_origin.ptr, d_voxel_size.ptr, d_projection_values.ptr + g * num_lors, num_lors, d_image_dim.ptr, group_size);
+        else if (T == 4)
+            joseph3d_fwd_batch_kernel<4><<<num_blocks, threads_per_block>>>(d_lor_start.ptr, d_lor_end.ptr, d_image.ptr + g * nvoxels, d_image_origin.ptr, d_voxel_size.ptr, d_projection_values.ptr + g * num_lors, num_lors, d_image_dim.ptr, group_size);
+        else if (T == 2)
+            joseph3d_fwd_batch_kernel<2><<<num_blocks, threads_per_block>>>(d_lor_start.ptr, d_lor_end.ptr, d_image.ptr + g * nvoxels, d_image_origin.ptr, d_voxel_size.ptr, d_projection_values.ptr + g * num_lors, num_lors, d_image_dim.ptr, group_size);
+        else
+            joseph3d_fwd_batch_single_kernel<<<num_blocks, threads_per_block>>>(d_lor_start.ptr, d_lor_end.ptr, d_image.ptr + g * nvoxels, d_image_origin.ptr, d_voxel_size.ptr, d_projection_values.ptr + g * num_lors, num_lors, d_image_dim.ptr);
+    }
     cudaError_t launch_err = cudaGetLastError();
     if (launch_err != cudaSuccess)
         throw std::runtime_error(
