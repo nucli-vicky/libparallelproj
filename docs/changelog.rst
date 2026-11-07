@@ -19,6 +19,16 @@ Added
   same as with single-image calls. The OpenMP forward batch projection is
   about 1.6-1.9x faster.
 
+* **Batch TOF sinogram projectors** ``joseph3d_tof_sino_fwd_batch`` and
+  ``joseph3d_tof_sino_back_batch`` (C API and Python bindings), with images
+  ``[num_images, n0, n1, n2]`` and TOF sinograms
+  ``[num_images, *lor_shape, num_tof_bins]``. The bilinear weights and the TOF
+  weights of each traversed plane are computed once for a group of images. In
+  our tests the OpenMP build is 3.5-5.9x (forward) and 2.8-4.0x (back) faster
+  than single-image calls for 4-8 images; with CUDA the back projection is
+  1.2-1.3x faster and the forward projection has the same speed as
+  single-image calls.
+
 Changed
 ^^^^^^^
 
