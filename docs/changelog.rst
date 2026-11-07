@@ -12,8 +12,9 @@ Changed
   ``projection_values[i]`` once per LOR, instead of updating global memory for
   every traversed plane. Together with the changes below, the CUDA forward
   projection of sinogram-ordered LORs is about 20% faster in our tests;
-  LORs in random order are not slower. CUDA back projection speed is
-  unchanged. The CPU (OpenMP) back projection is about 5% slower.
+  LORs in random order are not slower. Back projection speed is unchanged;
+  the OpenMP build keeps the previous per-corner adjoint interpolation for
+  the non-TOF back projection, which is faster there.
 
 * **Bilinear interpolation split into two steps.** New helpers
   ``bilinear_corners_fixed{0,1,2}`` compute the corner voxel offsets, bilinear

@@ -415,6 +415,119 @@ WORKER_QUALIFIER inline void bilinear_interp_adj_fixed2(T *img,
   scatter4(img, c, val);
 }
 
+#ifndef __CUDACC__
+// OpenMP build: adjoint bilinear interpolation that computes and adds one
+// corner at a time. With GCC this is faster for the back projection than
+// bilinear_corners_fixed* + scatter4, because fewer values must stay live
+// across the atomic updates.
+template <typename T = float>
+WORKER_QUALIFIER inline void bilinear_interp_adj_direct_fixed0(
+    T *img,
+    int n0, int n1, int n2,
+    int i0,
+    float i_f1,
+    float i_f2,
+    T val)
+{
+  // pointer to the i0-th plane
+  T *plane = img + std::size_t(i0) * n1 * n2;
+
+  int i1_0 = int(floorf(i_f1));
+  int i2_0 = int(floorf(i_f2));
+  int i1_1 = i1_0 + 1;
+  int i2_1 = i2_0 + 1;
+
+  float w1 = i_f1 - i1_0;
+  float w2 = i_f2 - i2_0;
+  float w00 = (1 - w1) * (1 - w2);
+  float w10 = (w1) * (1 - w2);
+  float w01 = (1 - w1) * (w2);
+  float w11 = (w1) * (w2);
+
+  auto inject = [&](int i1, int i2, float w)
+  {
+    if (i1 < 0 || i1 >= n1 || i2 < 0 || i2 >= n2)
+      return;
+    atomic_sum(&plane[std::size_t(i1) * n2 + i2], val * w);
+  };
+
+  inject(i1_0, i2_0, w00);
+  inject(i1_1, i2_0, w10);
+  inject(i1_0, i2_1, w01);
+  inject(i1_1, i2_1, w11);
+}
+
+template <typename T = float>
+WORKER_QUALIFIER inline void bilinear_interp_adj_direct_fixed1(
+    T *img,
+    int n0, int n1, int n2,
+    float i_f0,
+    int i1,
+    float i_f2,
+    T val)
+{
+  int i0_0 = int(floorf(i_f0));
+  int i2_0 = int(floorf(i_f2));
+  int i0_1 = i0_0 + 1;
+  int i2_1 = i2_0 + 1;
+
+  float w0 = i_f0 - i0_0;
+  float w2 = i_f2 - i2_0;
+  float w00 = (1 - w0) * (1 - w2);
+  float w10 = (w0) * (1 - w2);
+  float w01 = (1 - w0) * (w2);
+  float w11 = (w0) * (w2);
+
+  auto inject = [&](int i0, int i2, float w)
+  {
+    if (i0 < 0 || i0 >= n0 || i2 < 0 || i2 >= n2)
+      return;
+    std::size_t idx = std::size_t(i0) * n1 * n2 + std::size_t(i1) * n2 + i2;
+    atomic_sum(&img[idx], val * w);
+  };
+
+  inject(i0_0, i2_0, w00);
+  inject(i0_1, i2_0, w10);
+  inject(i0_0, i2_1, w01);
+  inject(i0_1, i2_1, w11);
+}
+
+template <typename T = float>
+WORKER_QUALIFIER inline void bilinear_interp_adj_direct_fixed2(
+    T *img,
+    int n0, int n1, int n2,
+    float i_f0,
+    float i_f1,
+    int i2,
+    T val)
+{
+  int i0_0 = int(floorf(i_f0));
+  int i1_0 = int(floorf(i_f1));
+  int i0_1 = i0_0 + 1;
+  int i1_1 = i1_0 + 1;
+
+  float w0 = i_f0 - i0_0;
+  float w1 = i_f1 - i1_0;
+  float w00 = (1 - w0) * (1 - w1);
+  float w10 = (w0) * (1 - w1);
+  float w01 = (1 - w0) * (w1);
+  float w11 = (w0) * (w1);
+
+  auto inject = [&](int i0, int i1, float w)
+  {
+    if (i0 < 0 || i0 >= n0 || i1 < 0 || i1 >= n1)
+      return;
+    std::size_t idx = std::size_t(i0) * n1 * n2 + std::size_t(i1) * n2 + i2;
+    atomic_sum(&img[idx], val * w);
+  };
+
+  inject(i0_0, i1_0, w00);
+  inject(i0_1, i1_0, w10);
+  inject(i0_0, i1_1, w01);
+  inject(i0_1, i1_1, w11);
+}
+#endif
+
 /**
  * @brief Computes the effective Gaussian Time-of-Flight kernel given by the integral of a normalized
  * Gaussian over dx - tbin_width/2 to dx + tbin_width/2.
