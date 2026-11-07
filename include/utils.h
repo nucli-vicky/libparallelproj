@@ -333,6 +333,38 @@ WORKER_QUALIFIER inline void scatter4(T *img, const BilinearCorners &c, T val)
 }
 
 /**
+ * Batch versions of gather4 / scatter4 for a group of T images.
+ * The images are stored one after the other, nvoxels apart; the group
+ * starts at image g. Images with index >= num_images are skipped, so the
+ * last group may be incomplete. T is a compile-time constant, so the loops
+ * over the group are unrolled and sum[] / val[] stay in registers.
+ */
+
+// forward step: add the interpolated value of image g+b to sum[b]
+template <int T>
+WORKER_QUALIFIER inline void gather4_batch(const float *img, std::size_t nvoxels,
+                                           std::size_t g, std::size_t num_images,
+                                           const BilinearCorners &c, float *sum)
+{
+  PP_UNROLL
+  for (int b = 0; b < T; ++b)
+    if (g + b < num_images)
+      sum[b] += gather4(img + (g + b) * nvoxels, c);
+}
+
+// back step: atomically add val[b], times the corner weights, to image g+b
+template <int T>
+WORKER_QUALIFIER inline void scatter4_batch(float *img, std::size_t nvoxels,
+                                            std::size_t g, std::size_t num_images,
+                                            const BilinearCorners &c, const float *val)
+{
+  PP_UNROLL
+  for (int b = 0; b < T; ++b)
+    if (g + b < num_images && val[b] != 0)
+      scatter4(img + (g + b) * nvoxels, c, val[b]);
+}
+
+/**
  * Bilinear interpolation (forward) and its adjoint (back) in one plane of a
  * 3D image with dims (n0,n1,n2), in a single call:
  *   - bilinear_interp_fixed{0,1,2}: interpolated image value

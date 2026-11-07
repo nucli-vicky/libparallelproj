@@ -127,6 +127,90 @@ extern "C"
 {
 #endif
 
+  /*!
+  @brief Forward projection of a batch of images using the Joseph 3D algorithm.
+
+  All images use the same LORs. The bilinear interpolation weights of each
+  traversed plane are computed once and applied to all images.
+
+  \pp_note_pointer_types
+
+  \pp_param_lor_start{num_lors}
+  \pp_param_lor_end{num_lors}
+  \pp_param_image_fwd_batch
+  \pp_note_image_layout
+  \pp_param_image_origin
+  \pp_param_voxel_size
+  \pp_param_projection_values_fwd_batch{num_lors}
+  \pp_param_count{num_lors,geometric LORs}
+  \pp_param_image_dim
+  \pp_param_count{num_images,images in the batch}
+  \pp_param_device_id
+  \pp_param_threads
+  */
+  PARALLELPROJ_API void joseph3d_fwd_batch(const float *lor_start,
+                                           const float *lor_end,
+                                           const float *image,
+                                           const float *image_origin,
+                                           const float *voxel_size,
+                                           float *projection_values,
+                                           std::size_t num_lors,
+                                           const int *image_dim,
+                                           std::size_t num_images,
+                                           int device_id = 0,
+                                           int threads_per_block = 64);
+
+#ifdef __cplusplus
+}
+#endif
+
+#ifdef __cplusplus
+extern "C"
+{
+#endif
+
+  /*!
+  @brief Backprojection of a batch of projections using the Joseph 3D algorithm.
+
+  All projections use the same LORs. The bilinear interpolation weights of
+  each traversed plane are computed once and applied to all images.
+
+  \pp_note_pointer_types
+
+  \pp_param_lor_start{num_lors}
+  \pp_param_lor_end{num_lors}
+  \pp_param_image_back_batch
+  \pp_note_image_layout
+  \pp_param_image_origin
+  \pp_param_voxel_size
+  \pp_param_projection_values_back_batch{num_lors}
+  \pp_param_count{num_lors,geometric LORs}
+  \pp_param_image_dim
+  \pp_param_count{num_images,images in the batch}
+  \pp_param_device_id
+  \pp_param_threads
+   */
+  PARALLELPROJ_API void joseph3d_back_batch(const float *lor_start,
+                                            const float *lor_end,
+                                            float *image,
+                                            const float *image_origin,
+                                            const float *voxel_size,
+                                            const float *projection_values,
+                                            std::size_t num_lors,
+                                            const int *image_dim,
+                                            std::size_t num_images,
+                                            int device_id = 0,
+                                            int threads_per_block = 64);
+
+#ifdef __cplusplus
+}
+#endif
+
+#ifdef __cplusplus
+extern "C"
+{
+#endif
+
   /*! @brief 3D sinogram TOF Joseph forward projector
 
   \pp_note_pointer_types
