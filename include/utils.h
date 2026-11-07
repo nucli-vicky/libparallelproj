@@ -1,6 +1,8 @@
 #pragma once
 #include <cstddef>
 #include <cmath>
+#include <climits>
+#include <stdexcept>
 #include "cuda_compat.h"
 
 #ifndef __CUDACC__
@@ -167,6 +169,14 @@ WORKER_QUALIFIER inline void ray_cube_intersection_joseph(
   }
 }
 
+// Throws std::invalid_argument if one image plane (n1*n2 voxels) does not
+// fit in an int. The bilinear helpers below rely on this.
+inline void check_image_plane_size(int n1, int n2)
+{
+  if (static_cast<long long>(n1) * n2 > INT_MAX)
+    throw std::invalid_argument("image_dim[1] * image_dim[2] must not exceed INT_MAX");
+}
+
 /**
  * Bilinear interpolation in one image plane, in two steps:
  *   1. bilinear_corners_fixed{0,1,2}: compute the offsets of the 4 corner
@@ -183,6 +193,8 @@ WORKER_QUALIFIER inline void ray_cube_intersection_joseph(
  *   - fixed2: plane at fixed i2, interpolate in (i0,i1)
  *
  * Offsets are relative to the first voxel of the image (C order, i2 fastest).
+ * Index products within one plane use int, so n1*n2 must fit in an int
+ * (see check_image_plane_size). The plane index term uses std::size_t.
  * Corner order is (lo,lo), (hi,lo), (lo,hi), (hi,hi) in the two interpolated
  * axes. The offset of a corner outside the image is not meaningful and must
  * not be used.
@@ -214,12 +226,14 @@ WORKER_QUALIFIER inline void bilinear_corners_fixed0(int n0, int n1, int n2,
   const int i2s[4] = {i2_0, i2_0, i2_1, i2_1};
   const float ws[4] = {(1 - w1) * (1 - w2), w1 * (1 - w2), (1 - w1) * w2, w1 * w2};
 
-  const std::size_t plane_base = std::size_t(i0) * n1 * n2;
+  // in-plane index products in int, plane offset in std::size_t
+  const int P = n1 * n2;
+  const std::size_t plane_base = std::size_t(i0) * P;
   for (int k = 0; k < 4; ++k)
   {
     c.w[k] = ws[k];
     c.valid[k] = (i1s[k] >= 0 && i1s[k] < n1 && i2s[k] >= 0 && i2s[k] < n2);
-    c.off[k] = plane_base + std::size_t(i1s[k]) * n2 + i2s[k];
+    c.off[k] = plane_base + std::size_t(i1s[k] * n2 + i2s[k]);
   }
 }
 
@@ -241,16 +255,17 @@ WORKER_QUALIFIER inline void bilinear_corners_fixed1(int n0, int n1, int n2,
   const int i2s[4] = {i2_0, i2_0, i2_1, i2_1};
   const float ws[4] = {(1 - w0) * (1 - w2), w0 * (1 - w2), (1 - w0) * w2, w0 * w2};
 
-  // the offsets of planes i0_0 and i0_1 differ by n1*n2
-  const std::size_t P = std::size_t(n1) * n2;
-  const std::size_t row = std::size_t(i1) * n2;
+  // in-plane index products in int; the offsets of planes i0_0 and i0_1
+  // differ by n1*n2
+  const int P = n1 * n2;
+  const int row = i1 * n2;
   const std::size_t base0 = std::size_t(i0_0) * P;
   const std::size_t base1 = base0 + P;
   for (int k = 0; k < 4; ++k)
   {
     c.w[k] = ws[k];
     c.valid[k] = (i0s[k] >= 0 && i0s[k] < n0 && i2s[k] >= 0 && i2s[k] < n2);
-    c.off[k] = ((k == 1 || k == 3) ? base1 : base0) + row + i2s[k];
+    c.off[k] = ((k == 1 || k == 3) ? base1 : base0) + std::size_t(row + i2s[k]);
   }
 }
 
@@ -272,8 +287,9 @@ WORKER_QUALIFIER inline void bilinear_corners_fixed2(int n0, int n1, int n2,
   const int i1s[4] = {i1_0, i1_0, i1_1, i1_1};
   const float ws[4] = {(1 - w0) * (1 - w1), w0 * (1 - w1), (1 - w0) * w1, w0 * w1};
 
-  // the offsets of planes i0_0 and i0_1 differ by n1*n2
-  const std::size_t P = std::size_t(n1) * n2;
+  // in-plane index products in int; the offsets of planes i0_0 and i0_1
+  // differ by n1*n2
+  const int P = n1 * n2;
   const std::size_t col = std::size_t(i2);
   const std::size_t base0 = std::size_t(i0_0) * P;
   const std::size_t base1 = base0 + P;
@@ -281,7 +297,7 @@ WORKER_QUALIFIER inline void bilinear_corners_fixed2(int n0, int n1, int n2,
   {
     c.w[k] = ws[k];
     c.valid[k] = (i0s[k] >= 0 && i0s[k] < n0 && i1s[k] >= 0 && i1s[k] < n1);
-    c.off[k] = ((k == 1 || k == 3) ? base1 : base0) + std::size_t(i1s[k]) * n2 + col;
+    c.off[k] = ((k == 1 || k == 3) ? base1 : base0) + std::size_t(i1s[k] * n2) + col;
   }
 }
 
