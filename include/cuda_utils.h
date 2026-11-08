@@ -1,4 +1,5 @@
 #pragma once
+#include "utils.h"
 
 #include <cstddef>
 #include <cuda_runtime.h>
@@ -122,6 +123,7 @@ inline std::size_t cuda_nvoxels_from_img_dim(const int *img_dim_ptr)
 
     if (h_img_dim[0] <= 0 || h_img_dim[1] <= 0 || h_img_dim[2] <= 0)
         throw std::invalid_argument("nvoxels_from_img_dim: invalid img_dim values");
+    check_image_plane_size(h_img_dim[1], h_img_dim[2]);
 
     return static_cast<std::size_t>(h_img_dim[0]) *
            static_cast<std::size_t>(h_img_dim[1]) *

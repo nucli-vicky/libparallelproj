@@ -84,8 +84,12 @@ if(BUILD_LIBRARY AND USE_CUDA)
   set(LIB_SOURCES
     src/joseph3d_fwd.cu
     src/joseph3d_back.cu
+    src/joseph3d_fwd_batch.cu
+    src/joseph3d_back_batch.cu
     src/joseph3d_tof_sino_fwd.cu
     src/joseph3d_tof_sino_back.cu
+    src/joseph3d_tof_sino_fwd_batch.cu
+    src/joseph3d_tof_sino_back_batch.cu
     src/joseph3d_tof_lm_fwd.cu
     src/joseph3d_tof_lm_back.cu
     src/cuda_utils.cu
@@ -111,8 +115,12 @@ elseif(BUILD_LIBRARY)
   set(LIB_SOURCES
     src/joseph3d_fwd.cpp
     src/joseph3d_back.cpp
+    src/joseph3d_fwd_batch.cpp
+    src/joseph3d_back_batch.cpp
     src/joseph3d_tof_sino_fwd.cpp
     src/joseph3d_tof_sino_back.cpp
+    src/joseph3d_tof_sino_fwd_batch.cpp
+    src/joseph3d_tof_sino_back_batch.cpp
     src/joseph3d_tof_lm_fwd.cpp
     src/joseph3d_tof_lm_back.cpp
     src/parallelproj_info.cpp

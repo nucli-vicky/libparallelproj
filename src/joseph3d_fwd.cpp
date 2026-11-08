@@ -13,6 +13,8 @@ void joseph3d_fwd(const float *lor_start,
                   int threads_per_block)
 {
 
+  check_image_plane_size(image_dim[1], image_dim[2]);
+
 #pragma omp parallel for
   for (long long i = 0; i < static_cast<long long>(num_lors); ++i)
   {

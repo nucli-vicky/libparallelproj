@@ -68,7 +68,13 @@ WORKER_QUALIFIER inline void joseph3d_back_worker(std::size_t i,
     {
       i1_f = i0 * a1 + b1;
       i2_f = i0 * a2 + b2;
-      bilinear_interp_adj_fixed0(image, n0, n1, n2, i0, i1_f, i2_f, val);
+#ifdef __CUDACC__
+      BilinearCorners c;
+      bilinear_corners_fixed0(n0, n1, n2, i0, i1_f, i2_f, c);
+      scatter4(image, c, val);
+#else
+      bilinear_interp_adj_direct_fixed0(image, n0, n1, n2, i0, i1_f, i2_f, val);
+#endif
     }
   }
   else if (direction == 1)
@@ -85,7 +91,13 @@ WORKER_QUALIFIER inline void joseph3d_back_worker(std::size_t i,
     {
       i0_f = i1 * a0 + b0;
       i2_f = i1 * a2 + b2;
-      bilinear_interp_adj_fixed1(image, n0, n1, n2, i0_f, i1, i2_f, val);
+#ifdef __CUDACC__
+      BilinearCorners c;
+      bilinear_corners_fixed1(n0, n1, n2, i0_f, i1, i2_f, c);
+      scatter4(image, c, val);
+#else
+      bilinear_interp_adj_direct_fixed1(image, n0, n1, n2, i0_f, i1, i2_f, val);
+#endif
     }
   }
   else if (direction == 2)
@@ -102,7 +114,13 @@ WORKER_QUALIFIER inline void joseph3d_back_worker(std::size_t i,
     {
       i0_f = i2 * a0 + b0;
       i1_f = i2 * a1 + b1;
-      bilinear_interp_adj_fixed2(image, n0, n1, n2, i0_f, i1_f, i2, val);
+#ifdef __CUDACC__
+      BilinearCorners c;
+      bilinear_corners_fixed2(n0, n1, n2, i0_f, i1_f, i2, c);
+      scatter4(image, c, val);
+#else
+      bilinear_interp_adj_direct_fixed2(image, n0, n1, n2, i0_f, i1_f, i2, val);
+#endif
     }
   }
 }

@@ -421,6 +421,104 @@ int test_box_projection_cuda_device_arrays(int device_id, int threadsperblock)
   return all_passed ? 0 : 1;
 }
 
+// Batch projectors with CUDA managed arrays: the forward and back projection
+// of each image in the batch must equal the single-image projectors.
+int test_batch_cuda_managed_arrays(int device_id, int threadsperblock)
+{
+  cudaSetDevice(device_id);
+  bool all_passed = true;
+
+  const int num_images = 3;
+  const std::size_t num_lors = 4;
+
+  int *img_dim;
+  float *voxsize, *img_origin, *xstart, *xend, *imgs, *proj, *proj1, *bimgs, *bimg1, *ones;
+  cudaMallocManaged(&img_dim, 3 * sizeof(int));
+  cudaMallocManaged(&voxsize, 3 * sizeof(float));
+  cudaMallocManaged(&img_origin, 3 * sizeof(float));
+  cudaMallocManaged(&xstart, 3 * num_lors * sizeof(float));
+  cudaMallocManaged(&xend, 3 * num_lors * sizeof(float));
+
+  img_dim[0] = 4;
+  img_dim[1] = 5;
+  img_dim[2] = 6;
+  std::size_t nvox = std::size_t(img_dim[0]) * img_dim[1] * img_dim[2];
+  for (int k = 0; k < 3; ++k)
+  {
+    voxsize[k] = 1.0f + 0.5f * k;
+    img_origin[k] = (-0.5f * img_dim[k] + 0.5f) * voxsize[k];
+  }
+
+  // LORs along each axis and one oblique LOR
+  const float s[4][3] = {{-20, 0.3f, 0.2f}, {0.1f, -20, 0.4f}, {0.2f, 0.3f, -20}, {-20, -15, -10}};
+  const float e[4][3] = {{20, 0.3f, 0.2f}, {0.1f, 20, 0.4f}, {0.2f, 0.3f, 20}, {20, 15, 10}};
+  for (std::size_t n = 0; n < num_lors; ++n)
+    for (int k = 0; k < 3; ++k)
+    {
+      xstart[3 * n + k] = s[n][k];
+      xend[3 * n + k] = e[n][k];
+    }
+
+  cudaMallocManaged(&imgs, num_images * nvox * sizeof(float));
+  cudaMallocManaged(&proj, num_images * num_lors * sizeof(float));
+  cudaMallocManaged(&proj1, num_lors * sizeof(float));
+  cudaMallocManaged(&bimgs, num_images * nvox * sizeof(float));
+  cudaMallocManaged(&bimg1, nvox * sizeof(float));
+  cudaMallocManaged(&ones, num_images * num_lors * sizeof(float));
+
+  for (std::size_t j = 0; j < num_images * nvox; ++j)
+  {
+    imgs[j] = float((j * 37) % 11) + 1.0f;
+    bimgs[j] = 0.0f;
+  }
+  for (std::size_t j = 0; j < num_images * num_lors; ++j)
+    ones[j] = 1.0f + float(j);
+
+  joseph3d_fwd_batch(xstart, xend, imgs, img_origin, voxsize, proj, num_lors, img_dim, num_images, device_id, threadsperblock);
+  joseph3d_back_batch(xstart, xend, bimgs, img_origin, voxsize, ones, num_lors, img_dim, num_images, device_id, threadsperblock);
+
+  for (int b = 0; b < num_images; ++b)
+  {
+    joseph3d_fwd(xstart, xend, imgs + b * nvox, img_origin, voxsize, proj1, num_lors, img_dim, device_id, threadsperblock);
+    for (std::size_t n = 0; n < num_lors; ++n)
+    {
+      if (std::abs(proj[b * num_lors + n] - proj1[n]) > 1e-6f * std::abs(proj1[n]) || proj1[n] == 0.0f)
+      {
+        std::cerr << "batch fwd mismatch: image " << b << " LOR " << n << ": " << proj[b * num_lors + n] << " vs " << proj1[n] << "\n";
+        all_passed = false;
+      }
+    }
+
+    for (std::size_t j = 0; j < nvox; ++j)
+      bimg1[j] = 0.0f;
+    joseph3d_back(xstart, xend, bimg1, img_origin, voxsize, ones + b * num_lors, num_lors, img_dim, device_id, threadsperblock);
+    for (std::size_t j = 0; j < nvox; ++j)
+    {
+      if (std::abs(bimgs[b * nvox + j] - bimg1[j]) > 1e-5f * (1.0f + std::abs(bimg1[j])))
+      {
+        std::cerr << "batch back mismatch: image " << b << " voxel " << j << "\n";
+        all_passed = false;
+        break;
+      }
+    }
+  }
+
+  cudaFree(img_dim);
+  cudaFree(voxsize);
+  cudaFree(img_origin);
+  cudaFree(xstart);
+  cudaFree(xend);
+  cudaFree(imgs);
+  cudaFree(proj);
+  cudaFree(proj1);
+  cudaFree(bimgs);
+  cudaFree(bimg1);
+  cudaFree(ones);
+
+  std::cout << (all_passed ? "batch managed arrays: passed" : "batch managed arrays: FAILED") << "\n";
+  return all_passed ? 0 : 1;
+}
+
 int main()
 {
   if (!cuda_device_available())
@@ -450,6 +548,10 @@ int main()
 
   std::cout << "\n--- Testing Box Projection with CUDA Device Arrays ---\n";
   if (test_box_projection_cuda_device_arrays(i, 64) != 0)
+    all_tests_passed = false;
+
+  std::cout << "\n--- Testing Batch Projectors with CUDA Managed Arrays ---\n";
+  if (test_batch_cuda_managed_arrays(i, 64) != 0)
     all_tests_passed = false;
 
   return all_tests_passed ? 0 : 1;

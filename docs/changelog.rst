@@ -1,6 +1,57 @@
 Changelog
 =========
 
+Unreleased
+----------
+
+Added
+^^^^^
+
+* **Batch non-TOF Joseph projectors** ``joseph3d_fwd_batch`` and
+  ``joseph3d_back_batch`` (C API and Python bindings). They project a batch of
+  images with the same LORs; images are stored as ``[num_images, n0, n1, n2]``
+  and projections as ``[num_images, *lor_shape]``. The bilinear interpolation
+  weights of each traversed plane are computed once and applied to a group of
+  images. On the GPU the group size is chosen so that the images of a group fit
+  in the L2 cache. In our tests, a batch of 8 images of 128x128x64 voxels is
+  projected about 2x faster (forward) and 1.2x faster (back) than with 8
+  single-image calls; for images too large for the L2 cache the speed is the
+  same as with single-image calls. The OpenMP forward batch projection is
+  about 1.6-1.9x faster.
+
+* **Batch TOF sinogram projectors** ``joseph3d_tof_sino_fwd_batch`` and
+  ``joseph3d_tof_sino_back_batch`` (C API and Python bindings), with images
+  ``[num_images, n0, n1, n2]`` and TOF sinograms
+  ``[num_images, *lor_shape, num_tof_bins]``. The bilinear weights and the TOF
+  weights of each traversed plane are computed once for a group of images. In
+  our tests the OpenMP build is 3.5-5.9x (forward) and 2.8-4.0x (back) faster
+  than single-image calls for 4-8 images; with CUDA the back projection is
+  1.2-1.3x faster and the forward projection has the same speed as
+  single-image calls.
+
+Changed
+^^^^^^^
+
+* **Non-TOF Joseph forward projector: faster inner loop.** The forward worker
+  now sums the plane contributions in a local variable and writes
+  ``projection_values[i]`` once per LOR, instead of updating global memory for
+  every traversed plane. Together with the changes below, the CUDA forward
+  projection of sinogram-ordered LORs is about 20% faster in our tests;
+  LORs in random order are not slower. Back projection speed is unchanged;
+  the OpenMP build keeps the previous per-corner adjoint interpolation for
+  the non-TOF back projection, which is faster there.
+
+* **Bilinear interpolation split into two steps.** New helpers
+  ``bilinear_corners_fixed{0,1,2}`` compute the corner voxel offsets, bilinear
+  weights and in-image flags of one plane; ``gather4`` / ``scatter4`` apply them
+  to an image. The existing ``bilinear_interp_*`` and ``bilinear_interp_adj_*``
+  functions keep their signatures and are now wrappers. The forward weights are
+  precomputed per corner, which changes forward projections by about 1 ulp.
+
+* **Index arithmetic within one image plane uses** ``int``. All projectors now
+  throw ``std::invalid_argument`` if one image plane (``image_dim[1] *
+  image_dim[2]`` voxels) exceeds ``INT_MAX``.
+
 v2.0.7 (2026-07-08)
 -------------------
 

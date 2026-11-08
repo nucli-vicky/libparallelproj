@@ -5,6 +5,7 @@
 #include <cmath>
 #include <vector>
 #include <numeric>
+#include <stdexcept>
 
 // In a CUDA build, joseph3d_fwd/back launch CUDA kernels, so this test needs
 // a physical GPU even though it is a plain .cpp file. PARALLELPROJ_CUDA is a
@@ -218,6 +219,45 @@ int test_forward_and_back_projection_cpp()
   return all_tests_passed ? 0 : 1;
 }
 
+// joseph3d_fwd/back must reject images where one plane (n1*n2 voxels) does
+// not fit in an int. The check runs before any image access, so no image
+// memory is needed.
+int test_image_plane_size_check_cpp()
+{
+  int img_dim[3] = {1, 50000, 50000};
+  float img_origin[3] = {0.0f, 0.0f, 0.0f};
+  float voxel_size[3] = {1.0f, 1.0f, 1.0f};
+  float dummy = 0.0f;
+
+  bool fwd_threw = false;
+  try
+  {
+    joseph3d_fwd(&dummy, &dummy, &dummy, img_origin, voxel_size, &dummy, 0, img_dim);
+  }
+  catch (const std::invalid_argument &)
+  {
+    fwd_threw = true;
+  }
+
+  bool back_threw = false;
+  try
+  {
+    joseph3d_back(&dummy, &dummy, &dummy, img_origin, voxel_size, &dummy, 0, img_dim);
+  }
+  catch (const std::invalid_argument &)
+  {
+    back_threw = true;
+  }
+
+  if (!fwd_threw || !back_threw)
+  {
+    std::cerr << "image plane size check failed: fwd threw " << fwd_threw
+              << ", back threw " << back_threw << std::endl;
+    return 1;
+  }
+  return 0;
+}
+
 int main()
 {
 #if defined(PARALLELPROJ_CUDA) && (PARALLELPROJ_CUDA == 1)
@@ -228,5 +268,6 @@ int main()
   int result = 0;
   result |= test_box_projection_cpp();
   result |= test_forward_and_back_projection_cpp();
+  result |= test_image_plane_size_check_cpp();
   return result;
 }
