@@ -1,6 +1,32 @@
 Changelog
 =========
 
+Unreleased
+----------
+
+Changed
+^^^^^^^
+
+* **Non-TOF Joseph forward projector: faster inner loop.** The forward worker
+  now sums the plane contributions in a local variable and writes
+  ``projection_values[i]`` once per LOR, instead of updating global memory for
+  every traversed plane. Together with the changes below, the CUDA forward
+  projection of sinogram-ordered LORs is about 20% faster in our tests;
+  LORs in random order are not slower. Back projection speed is unchanged;
+  the OpenMP build keeps the previous per-corner adjoint interpolation for
+  the non-TOF back projection, which is faster there.
+
+* **Bilinear interpolation split into two steps.** New helpers
+  ``bilinear_corners_fixed{0,1,2}`` compute the corner voxel offsets, bilinear
+  weights and in-image flags of one plane; ``gather4`` / ``scatter4`` apply them
+  to an image. The existing ``bilinear_interp_*`` and ``bilinear_interp_adj_*``
+  functions keep their signatures and are now wrappers. The forward weights are
+  precomputed per corner, which changes forward projections by about 1 ulp.
+
+* **Index arithmetic within one image plane uses** ``int``. All projectors now
+  throw ``std::invalid_argument`` if one image plane (``image_dim[1] *
+  image_dim[2]`` voxels) exceeds ``INT_MAX``.
+
 v2.0.7 (2026-07-08)
 -------------------
 
